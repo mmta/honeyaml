@@ -1,0 +1,72 @@
+name: CI
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    if: |
+      ! contains(github.event.head_commit.message, '[skip ci]')
+    outputs:
+      should_release: ${{ steps.comp_ver.outputs.should_release }}
+      current_version: ${{ steps.comp_ver.outputs.current_version }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: cardinalby/git-get-release-action@1.2.4
+        id: check_rel
+        name: get latest release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          latest: true
+          prerelease: false
+          doNotFailIfNotFound: true
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: compare versions
+        id: comp_ver
+        env:
+          REL_TAG: ${{ steps.check_rel.outputs.tag_name }}
+        run: |
+          cd scripts
+          cargo run ../Cargo.toml
+
+  publish-new-version:
+    needs: check-versions
+    if: needs.check-versions.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: "Create release"
+        uses: "actions/github-script@v5"
+        env:
+          RELEASE_TAG: v${{ needs.check-versions.outputs.current_version }}
+        with:
+          github-token: "${{ github.token }}"
+          script: |
+            try {
+              await github.rest.repos.createRelease({
+                draft: false,
+                generate_release_notes: true,
+                name: process.env.RELEASE_TAG,
+                owner: context.repo.owner,
+                prerelease: false,
+                repo: context.repo.repo,
+                tag_name: process.env.RELEASE_TAG,
+              });
+            } catch (error) {
+              core.setFailed(error.message);
+            }
+      - name: login-to-dockerhub
+        uses: "docker/login-action@v2"
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: build-and-push-image
+        run: |
+          ./scripts/dockerbuild.sh push

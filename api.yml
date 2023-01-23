@@ -1,0 +1,73 @@
+- path: /auth
+  path_type: authenticator
+  method: POST
+  authorization: jwt
+  auth_config:
+    issuer: Org
+    subject: MyApp
+    audience: MyApp
+  accounts:
+    - username: user
+      password: passwd1
+    - username: user2
+      password: passwd2
+    - username: admin
+      password: admpasswd
+      realm: asgard
+
+# put more specific path first before the more general ones
+# for instance, this one is more specific than the next one
+
+- path: /end-point1/foo
+  path_type: rest
+  method: GET
+  auth_required: false
+  return_code: 201
+  return_text: Hello world
+
+- path: /end-point1
+  path_type: rest
+  method: GET
+  auth_required: true
+  return_code: 200
+  return_text: |
+    {
+      "doc_id": 1,
+      "field" : "hello"
+    }
+
+- path: /end-point1
+  path_type: rest
+  method: POST
+  auth_required: false
+  return_code: 418
+  return_text: |
+    {
+      "doc_id": 2,
+      "field" : "hello poster"
+    }
+
+- path: /end-point2
+  path_type: rest
+  method: POST
+  auth_required: true
+  return_code: 301
+  return_text: echo blackhole >> /dev/null
+
+- path: /end-point3
+  path_type: rest
+  method: GET
+  auth_required: true
+  return_code: 403
+  return_text: try harder
+
+# Put the more general path last, like this one
+- path: /
+  path_type: rest
+  method: GET
+  auth_required: false
+  return_code: 201
+  return_text: |
+    <html>
+    <body>Authenticate through /auth first</body>
+    </html>

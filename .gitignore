@@ -1,0 +1,7 @@
+/target
+/dev
+/logs
+honeyaml.log.*
+report.json
+/docker/ctx
+/scripts/target
