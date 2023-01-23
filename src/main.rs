@@ -56,7 +56,7 @@ async fn main() -> std::io::Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).unwrap();
 
-    let yaml = fs::read_to_string("api.yaml")?;
+    let yaml = fs::read_to_string(args.file)?;
     let web_paths: Vec<schema::WebPath> = serde_yaml::from_str(&yaml).unwrap();
 
     let mut methods: Vec<String> = vec![];
