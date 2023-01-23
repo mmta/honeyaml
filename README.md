@@ -1,7 +1,7 @@
 # Honeyaml
 [![CI](https://github.com/mmta/honeyaml/actions/workflows/publish.yml/badge.svg)](https://github.com/mmta/honeyaml/actions/workflows/publish.yml)
 
-This is an API server honeypot whose endpoints and responses are all configurable through a YAML file, supports builtin JWT-based HTTP bearer/token authentication, and logs all accesses into a file in JSON lines format.
+This is an API server honeypot whose endpoints and responses are all configurable through a YAML file, supports JWT-based HTTP bearer/token authentication, and logs all accesses into a file in JSON lines format.
 
 ## Example
 
@@ -93,7 +93,7 @@ Which should be easy to consume by typical security monitoring infrastructure.
 
 ## The YAML config file
 
-There's no limit on how many paths can be defined. Each path can have its own return code, return text, authentication required flag, and HTTP method. Refer to [api.yaml](./api.yml) file for examples.
+There's no limit on how many paths can be defined. Each path can have its own return code, return text, authentication required flag, and HTTP method. Refer to [api.yml](./api.yml) file for examples.
 
 ## Install & usage
 
