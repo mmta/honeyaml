@@ -31,7 +31,7 @@ WORKDIR /honeyaml
 
 # Copy our build
 COPY --from=builder /ctx/target/x86_64-unknown-linux-musl/release/honeyaml ./
-COPY --from=builder /ctx/api.yaml ./
+COPY --from=builder /ctx/api.yml ./
 
 # Use an unprivileged user.
 USER honeyaml:honeyaml
