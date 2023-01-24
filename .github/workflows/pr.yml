@@ -10,6 +10,15 @@ jobs:
       ! contains(github.event.head_commit.message, '[skip ci]')
     steps:
       - uses: actions/checkout@v3
+      - name: setup rust
+        uses: hecrj/setup-rust-action@v1.4.1
+        with:
+          rust-version: stable
+          components: clippy
+      - name: lint and test
+        run: |
+          cargo clippy
+          cargo test
       - name: build-image
         run: |
           ./scripts/dockerbuild.sh
