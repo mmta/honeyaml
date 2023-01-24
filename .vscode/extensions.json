@@ -1,0 +1,7 @@
+{
+  "recommendations": [
+    "rust-lang.rust-analyzer",
+    "ryanluker.vscode-coverage-gutters",
+    "editorconfig.editorconfig"
+  ]
+}

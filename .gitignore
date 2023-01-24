@@ -5,3 +5,4 @@ honeyaml.log.*
 report.json
 /docker/ctx
 /scripts/target
+/coverage
