@@ -1,5 +1,6 @@
 # Honeyaml
-[![CI](https://github.com/mmta/honeyaml/actions/workflows/publish.yml/badge.svg)](https://github.com/mmta/honeyaml/actions/workflows/publish.yml)
+[![Build](https://github.com/mmta/honeyaml/actions/workflows/publish.yml/badge.svg)](https://github.com/mmta/honeyaml/actions/workflows/publish.yml)
+[![codecov](https://codecov.io/gh/mmta/honeyaml/branch/master/graph/badge.svg?token=S52D13O3PD)](https://codecov.io/gh/mmta/honeyaml)
 
 This is an API server honeypot whose endpoints and responses are all configurable through a YAML file, supports JWT-based HTTP bearer/token authentication, and logs all accesses into a file in JSON lines format.
 

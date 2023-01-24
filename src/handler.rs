@@ -131,3 +131,139 @@ pub async fn authenticate_post(
     }
     HttpResponse::Unauthorized().finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::test;
+
+    #[actix_web::test]
+    async fn test_handlers() {
+        let yaml =
+            r"
+      - path: /auth
+        path_type: authenticator
+        method: POST
+        authorization: jwt
+        auth_config:
+          issuer: Org
+          subject: MyApp
+          audience: MyApp
+        accounts:
+          - username: user
+            password: passwd1
+          - username: user2
+            password: passwd2
+      - path: /end-point1
+        path_type: rest
+        method: GET
+        auth_required: true
+        return_code: 201
+        return_text: Hello world
+      - path: /end-point3
+        path_type: rest
+        method: GET
+        auth_required: true
+        return_code: 700
+        return_text: Wrong http code       
+        ";
+
+        let web_paths: Vec<schema::WebPath> = serde_yaml::from_str(yaml).unwrap();
+
+        let mut state = crate::state::AppState {
+            paths: web_paths.clone(),
+            ..Default::default()
+        };
+
+        for p in web_paths {
+            if p.path_type == schema::PathType::Authenticator {
+                state.jwt_issuer = p.auth_config.issuer.to_string();
+                state.jwt_subject = p.auth_config.subject.to_string();
+                state.jwt_audience = p.auth_config.audience.to_string();
+                state.accounts = p.accounts;
+                break;
+            }
+        }
+
+        let app = test::init_service(
+            actix_web::App
+                ::new()
+                .app_data(web::Data::new(state))
+                .route("/auth-get", web::get().to(authenticate_get))
+                .route("/auth-post", web::post().to(authenticate_post))
+                .route("/{tail:.*}", web::get().to(handler))
+                .route("/{tail:.*}", web::post().to(handler))
+        ).await;
+
+        // path that doesn't exist
+        let mut uri = "/x00x00".to_string();
+        let req = test::TestRequest::get().uri(&uri.clone()).to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 404);
+
+        // successful login
+        uri = "/auth-get?username=user&password=passwd1".to_string();
+        let req = test::TestRequest::get().uri(&uri.clone()).to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        // unsuccessful login
+        uri = "/auth-get?username=user&password=passwd2".to_string();
+        let req = test::TestRequest::get().uri(&uri.clone()).to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 401);
+
+        // unsuccessful login through POST
+        uri = "/auth-post".to_string();
+        let req = test::TestRequest::post().uri(&uri.clone()).to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 401);
+
+        // successful login through POST
+        let mut data = HashMap::new();
+        data.insert("username".to_owned(), "user".to_owned());
+        data.insert("password".to_owned(), "passwd1".to_owned());
+
+        let req = test::TestRequest::post().uri(&uri.clone()).set_json(data).to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        // successful resource access
+        uri = "/end-point1/foo".to_string();
+        let b = test::read_body(resp).await;
+        let s = std::str::from_utf8(&b).unwrap();
+
+        let req = test::TestRequest
+            ::get()
+            .uri(&uri.clone())
+            .insert_header(("Authorization", format!("Bearer {}", s)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 201);
+
+        // successful resource access to an incorrectly configured path
+        uri = "/end-point3/bar".to_string();
+        let req = test::TestRequest
+            ::get()
+            .uri(&uri.clone())
+            .insert_header(("Authorization", format!("Bearer {}", s)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 500);
+
+        // resource access with incorrect token
+        let req = test::TestRequest
+            ::get()
+            .uri(&uri.clone())
+            .insert_header(("Authorization", "Bearer foobar"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 401);
+
+        // resource access without token
+        uri = "/end-point1/foo".to_string();
+        let req = test::TestRequest::get().uri(&uri.clone()).to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 401);
+    }
+}

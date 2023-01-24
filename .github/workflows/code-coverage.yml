@@ -1,0 +1,34 @@
+name: Codecov
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - src/**
+  workflow_dispatch:
+jobs:
+  update:
+    strategy:
+      fail-fast: false
+      matrix:
+        # platform: [Linux]
+        platform: [ubuntu-latest]
+    if: "! contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: setup rust
+        uses: hecrj/setup-rust-action@v1.4.1
+        with:
+          rust-version: stable
+      - name: generate coverage report
+        run: |
+          cargo install cargo-llvm-cov
+          ./scripts/coverage.sh
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+          flags: unittests
+          files: coverage/lcov.info

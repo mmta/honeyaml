@@ -1,0 +1,7 @@
+{
+  "coverage-gutters.coverageFileNames": [
+    "coverage/lcov.info"
+  ],
+  "rust-analyzer.checkOnSave": true,
+  "rust-analyzer.check.command": "clippy"
+}
