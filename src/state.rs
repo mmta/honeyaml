@@ -34,3 +34,22 @@ pub fn generate_key() -> HS256Key {
 pub fn key_from_bytes(bytes: &[u8]) -> HS256Key {
     HS256Key::from_bytes(bytes)
 }
+
+#[cfg(test)]
+mod test {
+    use jwt_simple::prelude::MACLike;
+
+    use super::*;
+
+    #[test]
+    fn test_keys() {
+        let a = AppState {
+            key: generate_key(),
+            ..Default::default()
+        };
+        let hmac = a.key.key();
+        let bytes = hmac.to_bytes();
+        let key_b = key_from_bytes(&bytes);
+        assert_eq!(a.key.to_bytes(), key_b.to_bytes())
+    }
+}

@@ -5,10 +5,10 @@ mod state;
 
 use actix_web::{ App, web, HttpServer };
 use clap::{ command, Parser };
-use tracing::metadata::LevelFilter;
-use tracing_subscriber::{ fmt, prelude::__tracing_subscriber_SubscriberExt, Registry, Layer };
+use schema::WebPath;
 use std::fs;
 use actix_cors::Cors;
+use anyhow::{ Result, Context };
 
 #[derive(Parser)]
 #[command(
@@ -35,82 +35,97 @@ struct Args {
     verbosity: u8,
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    let args = Args::parse();
-
-    let log_severity = match args.verbosity {
-        0 => LevelFilter::WARN,
-        1 => LevelFilter::INFO,
-        2 => LevelFilter::DEBUG,
-        _ => LevelFilter::TRACE,
-    };
-
-    fs::create_dir_all(args.directory.clone())?;
-    let file_appender = tracing_appender::rolling::daily(args.directory, "honeyaml.log");
-    let (non_blocking, _guard1) = tracing_appender::non_blocking(file_appender);
-    let file_layer = fmt::Layer::new().json().with_writer(non_blocking).with_filter(log_severity);
-
-    let stdout_log = tracing_subscriber::fmt::layer().with_filter(log_severity);
-    let subscriber = Registry::default().with(stdout_log).with(file_layer);
-
-    tracing::subscriber::set_global_default(subscriber).unwrap();
-
-    let yaml = fs::read_to_string(args.file)?;
-    let web_paths: Vec<schema::WebPath> = serde_yaml::from_str(&yaml).unwrap();
-
-    let mut methods: Vec<String> = vec![];
-    for p in web_paths.clone() {
+fn extract_methods(web_paths: Vec<schema::WebPath>) -> Vec<String> {
+    let mut methods = vec![];
+    for p in web_paths {
         methods.push(p.method.clone());
     }
     methods.sort_unstable();
     methods.dedup();
+    methods
+}
+
+fn parse_yaml(yaml: String) -> Result<Vec<schema::WebPath>> {
+    let web_paths: Vec<schema::WebPath> = serde_yaml::from_str(&yaml)?;
+    Ok(web_paths)
+}
+
+struct AuthSpec {
+    method: String,
+    path: Option<String>,
+}
+
+fn parse_authspec(web_paths: Vec<WebPath>) -> AuthSpec {
+    let mut auth_spec = AuthSpec { method: "GET".to_string(), path: None };
+    for p in &web_paths {
+        if p.path_type == schema::PathType::Authenticator {
+            auth_spec.method = p.method.to_ascii_uppercase();
+            auth_spec.path = Some(p.path.clone());
+            break;
+        }
+    }
+    auth_spec
+}
+
+fn data_factory(web_paths: Vec<WebPath>, key: jwt_simple::prelude::HS256Key) -> state::AppState {
+    let mut state = state::AppState {
+        paths: web_paths.clone(),
+        key: state::key_from_bytes(&key.to_bytes()),
+        ..Default::default()
+    };
+
+    for p in &web_paths {
+        if p.path_type == schema::PathType::Authenticator {
+            state.jwt_issuer = p.auth_config.issuer.to_string();
+            state.jwt_subject = p.auth_config.subject.to_string();
+            state.jwt_audience = p.auth_config.audience.to_string();
+            state.accounts = p.accounts.clone();
+            break;
+        }
+    }
+    state
+}
+
+#[actix_web::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    let log_severity = logger::verbosity_to_level_filter(args.verbosity);
+
+    let sub = logger
+        ::setup_logger(args.directory.clone(), "honeyaml.log".to_owned(), log_severity)
+        .context(format!("cannot setup logger on {}", args.directory))?;
+    tracing::subscriber
+        ::set_global_default(sub)
+        .context("cannot set global subscriber for logging")?;
+
+    let s = fs::read_to_string(args.file.clone()).context(format!("cannot read {}", args.file))?;
+    let web_paths = parse_yaml(s).context(format!("cannot parse {}", args.file))?;
 
     // all threads get the same key
     let key = state::generate_key();
 
     HttpServer::new(move || {
-        let mut state = state::AppState {
-            paths: web_paths.clone(),
-            key: state::key_from_bytes(&key.to_bytes()),
-            ..Default::default()
-        };
-
-        let mut auth_method = "GET".to_string();
-        let mut auth_path: Option<String> = None;
-
-        for p in &web_paths {
-            if p.path_type == schema::PathType::Authenticator {
-                state.jwt_issuer = p.auth_config.issuer.to_string();
-                state.jwt_subject = p.auth_config.subject.to_string();
-                state.jwt_audience = p.auth_config.audience.to_string();
-                state.accounts = p.accounts.clone();
-                auth_method = p.method.to_ascii_uppercase();
-                auth_path = Some(p.path.clone());
-                break;
-            }
-        }
-
-        let v: Vec<&str> = methods
-            .iter()
-            .map(|s| &**s)
-            .collect();
-
+        let bindings = extract_methods(web_paths.clone());
+        let methods: Vec<&str> = bindings.iter().map(String::as_str).collect();
         let app = App::new()
             .wrap(
                 Cors::default()
                     .allow_any_origin()
                     .allow_any_header()
-                    .allowed_methods(v)
+                    .allowed_methods(methods)
                     .disable_vary_header()
             )
-            .app_data(web::Data::new(state));
-        if let Some(v) = auth_path {
-            let r = if auth_method == "GET" {
+            .app_data(web::Data::new(data_factory(web_paths.clone(), key.clone())));
+
+        let auth_spec = parse_authspec(web_paths.clone());
+        if let Some(v) = auth_spec.path {
+            let r = if auth_spec.method == "GET" {
                 web::get().to(handler::authenticate_get)
             } else {
                 web::post().to(handler::authenticate_post)
             };
+
             app.route(&v, r)
                 .route("/{tail:.*}", web::get().to(handler::handler))
                 .route("/{tail:.*}", web::post().to(handler::handler))
@@ -125,5 +140,56 @@ async fn main() -> std::io::Result<()> {
     })
         .workers(args.workers.into())
         .bind(("0.0.0.0", args.port))?
-        .run().await
+        .run().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_main() {
+        let yaml =
+            r"
+  - path: /auth
+    path_type: authenticator
+    method: POST
+    authorization: jwt
+    auth_config:
+      issuer: Org
+      subject: MyApp
+      audience: MyApp
+    accounts:
+      - username: user
+        password: passwd1
+      - username: user2
+        password: passwd2
+  - path: /end-point1
+    path_type: rest
+    method: GET
+    auth_required: true
+    return_code: 201
+    return_text: Hello world
+  - path: /end-point3
+    path_type: rest
+    method: GET
+    auth_required: true
+    return_code: 700
+    return_text: Wrong http code       
+    ";
+        let s = parse_yaml(yaml.to_string());
+        assert!(s.is_ok());
+        let paths = s.unwrap();
+        assert_eq!(paths.len(), 3);
+        let m = extract_methods(paths.clone());
+        assert_eq!(m, ["GET", "POST"]);
+        let a = parse_authspec(paths.clone());
+        assert_eq!(a.path.unwrap(), "/auth".to_string());
+        let args = Args::parse();
+        assert_eq!(args.file, "./api.yml");
+
+        let state = data_factory(paths, state::generate_key());
+        assert_eq!(state.jwt_audience, "MyApp")
+    }
 }
