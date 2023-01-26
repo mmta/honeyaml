@@ -3,7 +3,7 @@ mod logger;
 mod handler;
 mod state;
 
-use actix_web::{ App, web, HttpServer };
+use actix_web::{ App, web, HttpServer, rt::time::sleep };
 use clap::{ command, Parser };
 use schema::WebPath;
 use std::fs;
@@ -86,18 +86,19 @@ fn data_factory(web_paths: Vec<WebPath>, key: jwt_simple::prelude::HS256Key) -> 
     state
 }
 
-#[actix_web::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-
+async fn run(args: Args, listen: bool, require_logging: bool) -> Result<()> {
     let log_severity = logger::verbosity_to_level_filter(args.verbosity);
 
     let sub = logger
         ::setup_logger(args.directory.clone(), "honeyaml.log".to_owned(), log_severity)
         .context(format!("cannot setup logger on {}", args.directory))?;
-    tracing::subscriber
+
+    let log_result = tracing::subscriber
         ::set_global_default(sub)
-        .context("cannot set global subscriber for logging")?;
+        .context("cannot set global subscriber for logging");
+    if require_logging && log_result.is_err() {
+        return Err(log_result.unwrap_err());
+    }
 
     let s = fs::read_to_string(args.file.clone()).context(format!("cannot read {}", args.file))?;
     let web_paths = parse_yaml(s).context(format!("cannot parse {}", args.file))?;
@@ -105,7 +106,7 @@ async fn main() -> Result<()> {
     // all threads get the same key
     let key = state::generate_key();
 
-    HttpServer::new(move || {
+    let server = HttpServer::new(move || {
         let bindings = extract_methods(web_paths.clone());
         let methods: Vec<&str> = bindings.iter().map(String::as_str).collect();
         let app = App::new()
@@ -137,19 +138,32 @@ async fn main() -> Result<()> {
                 .route("/{tail:.*}", web::put().to(handler::handler))
                 .route("/{tail:.*}", web::delete().to(handler::handler))
         }
-    })
-        .workers(args.workers.into())
-        .bind(("0.0.0.0", args.port))?
-        .run().await?;
+    });
+    let server = server.workers(args.workers.into()).bind(("0.0.0.0", args.port))?.run();
+    let handle = server.handle();
+    if !listen {
+        actix_web::rt::spawn(async move {
+            sleep(std::time::Duration::from_secs(1)).await;
+            handle.stop(true).await;
+        });
+    }
+    server.await?;
     Ok(())
+}
+
+#[actix_web::main]
+async fn main() -> Result<()> {
+    run(Args::parse(), true, true).await
 }
 
 #[cfg(test)]
 mod test {
+    use std::io::Write;
+
     use super::*;
 
     #[test]
-    fn test_main() {
+    fn test_helpers() {
         let yaml =
             r"
   - path: /auth
@@ -158,6 +172,7 @@ mod test {
     authorization: jwt
     auth_config:
       issuer: Org
+
       subject: MyApp
       audience: MyApp
     accounts:
@@ -190,6 +205,67 @@ mod test {
         assert_eq!(args.file, "./api.yml");
 
         let state = data_factory(paths, state::generate_key());
-        assert_eq!(state.jwt_audience, "MyApp")
+        assert_eq!(state.jwt_audience, "MyApp");
+    }
+
+    #[actix_web::test]
+    async fn test_run() {
+        let yaml =
+            r"
+  - path: /auth
+    path_type: authenticator
+    method: POST
+    authorization: jwt
+    auth_config:
+      issuer: Org
+      subject: MyApp
+      audience: MyApp
+    accounts:
+      - username: user
+        password: passwd1
+      - username: user2
+        password: passwd2
+  - path: /end-point1
+    path_type: rest
+    method: GET
+    auth_required: true
+    return_code: 201
+    return_text: Hello world
+    ";
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmpfile, "{}", yaml).unwrap();
+        let path = tmpfile.path();
+        let args = Args {
+            port: 9101,
+            directory: "/tmp".to_string(),
+            file: path.to_string_lossy().to_string(),
+            workers: 1,
+            verbosity: 0,
+        };
+        let r = run(args, false, false).await;
+        assert!(r.is_ok());
+
+        // no auth section
+        let yaml =
+            r"
+          - path: /end-point1
+            path_type: rest
+            method: GET
+            auth_required: true
+            return_code: 201
+            return_text: Hello world
+        ";
+        let mut tmpfile = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmpfile, "{}", yaml).unwrap();
+        let path = tmpfile.path();
+        let args = Args {
+            port: 9102,
+            directory: "/tmp".to_string(),
+            file: path.to_string_lossy().to_string(),
+            workers: 1,
+            verbosity: 0,
+        };
+        let r = run(args, false, false).await;
+        assert!(r.is_ok())
     }
 }

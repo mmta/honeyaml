@@ -34,3 +34,4 @@ default-features = false
 assert_cmd = "2.0.8"
 glob = "0.3.1"
 predicates = "2.1.5"
+tempfile = "3.3.0"
